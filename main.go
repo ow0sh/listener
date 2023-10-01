@@ -29,7 +29,7 @@ func main() {
 		}
 	}()
 
-	client, err := ethclient.Dial("https://mainnet.infura.io/v3/4740b9f6ce7f4a2f97f9158e5658151e")
+	client, err := ethclient.Dial("http://65.108.9.125:8543/")
 	if err != nil {
 		panic(err)
 	}
