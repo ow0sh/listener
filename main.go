@@ -8,10 +8,8 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	token "github.com/ow0sh/listener/contract"
-	"github.com/pkg/errors"
+	"github.com/ow0sh/listener/crypto"
 	"github.com/sirupsen/logrus"
-	"golang.org/x/crypto/sha3"
-	"math"
 	"math/big"
 	"os"
 	"os/signal"
@@ -58,15 +56,6 @@ func main() {
 		panic(err)
 	}
 
-	// Converting methodIDs to hash
-	transfer := []byte("transfer(address,uint256)")
-	transferHash := sha3.NewLegacyKeccak256()
-	transferHash.Write(transfer)
-
-	transferFrom := []byte("transferFrom(address,address,uint256)")
-	transferFromHash := sha3.NewLegacyKeccak256()
-	transferFromHash.Write(transferFrom)
-
 	var wg sync.WaitGroup
 	// Getting transactions from block, and iterate through each of them
 	txs := block.Transactions()
@@ -84,71 +73,58 @@ func main() {
 
 			// Checking if it's simple transfer or interaction with smart contract
 			if len(tx.Data()) != 0 {
-
 				// transfer(address,uint256) == MethodID
-				if hexutil.Encode(transferHash.Sum(nil)[:4]) == hexutil.Encode(tx.Data()[:4]) {
+				if crypto.IsTransfer(tx.Data()) {
 					// Getting recipient of transaction
 					to := common.HexToAddress(hexutil.Encode(tx.Data()[4:36]))
 
 					// Getting instance of ERC20 contract
-					instance, err := token.NewToken(*tx.To(), client)
+					instance, err := token.UnwrapContract(*tx.To(), client)
 					if err != nil {
-						log.Error(errors.Wrap(err, "failed to create instance"))
+						log.Error(err)
 						return
 					}
-
-					symbol, err := instance.Symbol(nil)
-					if err != nil {
-						log.Error(errors.Wrap(err, "failed to get symbol"))
-						return
-					}
-
-					decimals, err := instance.Decimals(nil)
+					decimals, err := instance.Decimals()
 					if err != nil {
 						decimals = 18
 					}
+					symbol, err := instance.Symbol()
+					if err != nil {
+						log.Error(err)
+						return
+					}
 
 					// Dividing amount of transaction by token's decimals
-					num1 := big.NewInt(0).SetBytes(tx.Data()[36:])
-					num2 := big.NewInt(int64(math.Pow(10, float64(decimals))))
-					aflt1 := new(big.Float).SetInt(num1)
-					aflt2 := new(big.Float).SetInt(num2)
-					amount := new(big.Float).Quo(aflt1, aflt2)
+					amount := divideBigIntByDecimals(big.NewInt(0).SetBytes(tx.Data()[36:]), decimals)
 
 					log.Info(fmt.Sprintf("{%v}-{%v}-{%v}-{%v}-{%v}", from, to, amount, symbol, tx.To()))
 					return
 				}
 
-				// transferFrom(address,address,uint256) == MethodID
-				if hexutil.Encode(transferFromHash.Sum(nil)[:4]) == hexutil.Encode(tx.Data()[:4]) {
+				//// transferFrom(address,address,uint256) == MethodID
+				if crypto.IsTransferFrom(tx.Data()) {
 					// Getting sender and recipient of transaction from data
 					from := common.HexToAddress(hexutil.Encode(tx.Data()[4:36]))
 					to := common.HexToAddress(hexutil.Encode(tx.Data()[36:68]))
 
 					// Getting instance of ERC20 contract
-					instance, err := token.NewToken(*tx.To(), client)
+					instance, err := token.UnwrapContract(*tx.To(), client)
 					if err != nil {
-						log.Error(errors.Wrap(err, "failed to get token"))
+						log.Error(err)
 						return
 					}
-
-					symbol, err := instance.Symbol(nil)
-					if err != nil {
-						log.Error(errors.Wrap(err, "failed to get symbol"))
-						return
-					}
-
-					decimals, err := instance.Decimals(nil)
+					decimals, err := instance.Decimals()
 					if err != nil {
 						decimals = 18
 					}
+					symbol, err := instance.Symbol()
+					if err != nil {
+						log.Error(err)
+						return
+					}
 
 					// Dividing amount of transaction by token's decimals
-					num1 := big.NewInt(0).SetBytes(tx.Data()[68:])
-					num2 := big.NewInt(int64(math.Pow(10, float64(decimals))))
-					aflt1 := new(big.Float).SetInt(num1)
-					aflt2 := new(big.Float).SetInt(num2)
-					amount := new(big.Float).Quo(aflt1, aflt2)
+					amount := divideBigIntByDecimals(big.NewInt(0).SetBytes(tx.Data()[68:]), decimals)
 
 					log.Info(fmt.Sprintf("{%v}-{%v}-{%v}-{%v}-{%v}", from, to, amount, symbol, tx.To()))
 					return
@@ -158,11 +134,7 @@ func main() {
 			to := tx.To()
 
 			// Dividing amount of transaction by token's decimals
-			num1 := tx.Value()
-			num2 := big.NewInt(int64(math.Pow(10, 18)))
-			aflt1 := new(big.Float).SetInt(num1)
-			aflt2 := new(big.Float).SetInt(num2)
-			amount := new(big.Float).Quo(aflt1, aflt2)
+			amount := divideBigIntByDecimals(tx.Value(), 18)
 
 			log.Info(fmt.Sprintf("{%v}-{%v}-{%v}-{ETH}-{0x000000000000000000000000000000000000000}", from, to, amount))
 		}(i, tx)
